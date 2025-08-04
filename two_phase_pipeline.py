@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 import argparse, json, os, sys, shutil, time, random
 from pathlib import Path
@@ -7,7 +6,6 @@ from typing import Optional, List, Dict, Tuple
 import yaml, torch
 from ultralytics import YOLO
 
-# --- PIL-based quick image sanity (safe on Windows) ---
 try:
     from PIL import Image, ImageFile
     ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -15,7 +13,6 @@ try:
 except Exception:
     _HAS_PIL = False
 
-# ----------------------- dataset helpers -----------------------
 def _has_splits(d: Path) -> bool:
     return (d / "train").exists() and ((d / "val").exists() or (d / "valid").exists() or (d / "test").exists())
 
@@ -54,7 +51,7 @@ def erase_caches(root_dir: Path) -> None:
         try: p.unlink()
         except Exception: pass
 
-# ----------------------- quick stats -----------------------
+# quick stats 
 def label_stats(dataset_root: Path) -> Dict[str, Dict[str, int]]:
     stats: Dict[str, Dict[str, int]] = {}
     for sp in ["train", "val", "test"]:
@@ -71,7 +68,6 @@ def label_stats(dataset_root: Path) -> Dict[str, Dict[str, int]]:
         stats[sp] = {"images": len(imgs), "label_files": len(labs), "boxes": n_boxes}
     return stats
 
-# ----------------------- YAML writers -----------------------
 def write_multiclass_yaml(dataset_root: Path, yaml_out: Path, nc: int = 5, names: Optional[List[str]] = None) -> Path:
     def img_dir(name: str) -> Optional[str]:
         d = _split_dir(dataset_root, name)
@@ -100,7 +96,7 @@ def write_glove_yaml(glove_root: Path, yaml_out: Path) -> Path:
         yaml.safe_dump(data, f, sort_keys=False)
     return yaml_out
 
-# ----------------------- glove-only dataset -----------------------
+# glove-only dataset
 def detect_glove_index_from_model(weights_path: Path) -> int:
     try:
         m = YOLO(weights_path.as_posix())
@@ -160,7 +156,6 @@ def make_glove_only_dataset(src_root: Path, out_root: Path, glove_idx: Optional[
     erase_caches(out_root)
     return out_root
 
-# ----------------------- misc -----------------------
 def load_metrics(res) -> Dict[str, float]:
     m = getattr(res, "results_dict", None) or getattr(res, "metrics", None) or {}
     return {
@@ -198,7 +193,7 @@ def sanity_read_random_images(ds_root: Path, n: int = 32, timeout_s: float = 15.
             break
         try:
             with Image.open(p) as im:
-                im.verify()  # quick header check
+                im.verify() 
             ok += 1
         except Exception:
             fail += 1
@@ -207,7 +202,7 @@ def sanity_read_random_images(ds_root: Path, n: int = 32, timeout_s: float = 15.
     print(f"[SANITY] Done. ok={ok}, fail={fail}")
     return ok, fail
 
-# ----------------------- CLI -----------------------
+# CLI 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Two-phase pipeline (stable, glove-first)")
     p.add_argument("--dataset-dir", type=str, default="data/baseball_rubber_home_glove")
@@ -231,12 +226,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rect", action="store_true", default=False)
     return p.parse_args()
 
-# ----------------------- main -----------------------
+# main 
 def main() -> None:
     root = Path(__file__).resolve().parent
     args = parse_args()
 
-    # Stability on Windows
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -268,7 +262,7 @@ def main() -> None:
     glove_root = make_glove_only_dataset(ds_root, root / "data" / "glove_only", glove_idx=glove_idx)
     glove_yaml = write_glove_yaml(glove_root, root / "data" / "glove_only.yaml")
 
-    # Quick baseline
+    # baseline
     print("\n=== Baseline evaluation (glove-only) ===")
     baseline_model = YOLO(weights_path.as_posix())
     val_half = args.device != "cpu"
@@ -279,14 +273,12 @@ def main() -> None:
     baseline = load_metrics(baseline_res)
     print("[Baseline]", json.dumps(baseline, indent=2))
 
-    # Sanity check (PIL)
     sanity_read_random_images(ds_root, n=32, timeout_s=15.0)
 
-    # ---------------- Phase 1 (optional, multi-class) ----------------
+    # Phase 1 
     if not args.skip_phase1:
         print("\n=== Phase 1: Multi-class (nc=5) fine-tune ===")
         model_p1 = YOLO(weights_path.as_posix())
-        # P1 warm-up (1 epoch, no mosaic/mixup)
         hp1_warm = dict(
             imgsz=args.imgsz, epochs=1, batch=args.batch, workers=args.workers,
             optimizer="AdamW", lr0=3e-4, lrf=0.2, warmup_epochs=1, momentum=0.9, weight_decay=0.01,
@@ -302,7 +294,6 @@ def main() -> None:
         )
         model_p1.train(data=fixed_yaml.as_posix(), device=args.device, **hp1_warm)
 
-        # P1 main (lighter mosaic to avoid first-batch stalls)
         hp1 = dict(
             imgsz=args.imgsz, epochs=args.phase1_epochs, batch=args.batch, workers=args.workers,
             optimizer="AdamW", lr0=3e-4, lrf=0.2, warmup_epochs=2, momentum=0.9, weight_decay=0.01,
@@ -337,11 +328,10 @@ def main() -> None:
     else:
         p2_start = weights_path
 
-    # ---------------- Phase 2: glove-only (nc=1) ----------------
+    # Phase 2
     print("\n=== Phase 2: Glove-only (nc=1) fine-tune ===")
     model_p2 = YOLO(p2_start.as_posix())
 
-    # P2 warm-up (1 epoch, no mosaic/mixup)
     hp2_warm = dict(
         imgsz=args.imgsz, epochs=1, batch=args.batch, workers=args.workers,
         optimizer="AdamW", lr0=2e-4, lrf=0.2, warmup_epochs=1, momentum=0.9, weight_decay=0.01,
@@ -357,7 +347,6 @@ def main() -> None:
     )
     model_p2.train(data=glove_yaml.as_posix(), device=args.device, **hp2_warm)
 
-    # P2 main (light mosaic for diversity, close halfway)
     hp2 = dict(
         imgsz=args.imgsz, epochs=args.phase2_epochs, batch=args.batch, workers=args.workers,
         optimizer="AdamW", lr0=2e-4, lrf=0.2, warmup_epochs=2, momentum=0.9, weight_decay=0.01,
