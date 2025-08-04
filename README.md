@@ -1,91 +1,90 @@
-# MLB Glove‑Tracking Transfer Learning
+# MLB Glove-Tracking — Transfer Learning (Ultralytics YOLO)
 
-This repository contains all code, scripts and documentation to fine‑tune a YOLO‑based glove‑tracking model for Major League Baseball (MLB) using the `baseball_rubber_home_glove` dataset.  The goal of this project is to improve the accuracy of an existing glove‑tracking model by performing transfer learning on a domain‑specific dataset of pitchers’ gloves in the ``rubber/home`` view from MLB broadcasts.  The work draws on the pre‑trained model provided in the original [`BaseballCV` project](https://github.com/BaseballCV/BaseballCV) and uses the Ultralytics YOLO implementation for simplicity and reproducibility.
+This project improves the **glove-tracking** component of a pre-trained YOLO model using the
+`baseball_rubber_home_glove` dataset from BaseballCV. We leverage **transfer learning** to adapt the
+pretrained detector to MLB broadcast “rubber/home” views while keeping the training stable on Windows + RTX GPUs.
 
-## Contents
+> **What you submit:** a private GitHub repository containing all **code** and **documentation** to run the pipeline and a write-up (this README, or a notebook) that justifies each modeling decision and compares your fine-tuned model against the **original pretrained** model.
 
-| Path | Description |
-| --- | --- |
-| `data/` | Utility script for downloading **and preparing** the dataset and pre‑trained weights. **The raw dataset is not included** because the download server requires authentication. Use `python data/download_data.py` to fetch the zip file and `--extract` to unzip and build the dataset YAML. |
-| `models/` | Placeholder for pre‑trained weights. After running `download_data.py` the file `glove_tracking_v4_YOLOv11.pt` will be placed here. |
-| `scripts/train.py` | Training script for fine‑tuning the glove‑tracking model on the new dataset. |
-| `scripts/evaluate.py` | Script to evaluate the fine‑tuned model against the baseline model. |
-| `report.md` | Detailed write‑up of the modelling pipeline, including assumptions, data preparation, training choices and evaluation. |
-| `run_pipeline.py` | One‑stop script that extracts the dataset, creates the YAML file, trains the model and evaluates baseline vs. fine‑tuned results. |
-| `requirements.txt` | Python dependencies required to run the scripts. |
+---
 
-## Quick start
+## Table of contents
 
-1. **Clone this repository** (private) and install dependencies into a clean Python environment:
+1. [Goals & constraints](#goals--constraints)  
+2. [Data & task](#data--task)  
+3. [Model & transfer strategy](#model--transfer-strategy)  
+4. [Why a two-phase pipeline?](#why-a-two-phase-pipeline)  
+5. [Environment & installation](#environment--installation)  
+6. [How to run (one-liners)](#how-to-run-one-liners)  
+7. [What each phase does](#what-each-phase-does)  
+8. [Hyperparameters & design choices](#hyperparameters--design-choices)  
+9. [Evaluation methodology](#evaluation-methodology)  
+10. [Results & interpretation](#results--interpretation)  
+11. [Ablations & “best accuracy” recipe](#ablations--best-accuracy-recipe)  
+12. [Troubleshooting & known pitfalls](#troubleshooting--known-pitfalls)  
+13. [Reproducibility & submission checklist](#reproducibility--submission-checklist)  
+14. [Repo layout](#repo-layout)  
+15. [License](#license)
 
-   ```bash
-   # clone the repository (requires access to your private repo)
-   git clone https://github.com/TheDanGriff/MLB_GloveTracking_TransferLearning.git
-   cd MLB_GloveTracking_TransferLearning
+---
 
-   # create and activate a virtual environment
-   python3 -m venv .venv
-   source .venv/bin/activate  # on Windows use ".venv\\Scripts\\activate"
+## Goals & constraints
 
-   # install dependencies
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+- **Goal:** Improve **glove detection** quality (mAP@0.50 and mAP@0.50:0.95, precision/recall) over the **pretrained** BaseballCV YOLO weights in a way that’s **reproducible** and **well-justified**.
+- **Constraints we account for:**
+  - Windows + NVIDIA RTX (PyTorch + CUDA 12.1 wheels).
+  - Occasional Windows **data-loader stalls**: mitigated with a **warm-up epoch**, `workers=0`, `cache=none`, and delayed mosaic.
+  - Dataset is smallish; careful **augmentation scheduling** and light regularization help avoid over/under-fit.
 
-2. **Download and prepare the dataset and weights.**  The external links in BaseballCV point to the dataset and pre‑trained weights【49790347083117†L209-L215】. Run:
+---
 
-   ```bash
-   python data/download_data.py
-   ```
+## Data & task
 
-   This will attempt to fetch `baseball_rubber_home_glove.zip` and `glove_tracking_v4_YOLOv11.pt` into the `data/raw/` and `models/` folders respectively.  If the server returns **403 Forbidden** you will need to download the zip and weight files manually from:
+- Dataset ZIP: `baseball_rubber_home_glove.zip` (images + YOLO text labels).
+- Native labels include **five classes** (`glove`, `homeplate`, `baseball`, `rubber`, `na`).  
+  **Our target task** is **glove detection**; we evaluate on a **glove-only view** (nc=1).
+- We keep the dataset splits (`train/val/test`) intact. The pipeline creates two YAMLs at runtime:
+  - **Multi-class YAML (nc=5)** for optional Phase-1.
+  - **Glove-only YAML (nc=1)** for Phase-2 training and all glove-only evaluations.
 
-   - Dataset: <https://data.balldatalab.com/index.php/s/pLy7sZqqMdx3jj7/download/baseball_rubber_home_glove.zip>
-   - Weights: <https://data.balldatalab.com/index.php/s/BwwWJbSsesFSBDa/download/glove_tracking_v4_YOLOv11.pt>
+---
 
-   Place the ZIP file in either `data/raw/` or directly under `data/`, and the weights file in `models/`.
+## Model & transfer strategy
 
-3. **Extract the dataset and build the dataset YAML.**  Once you have the zip file, run:
+- Base detector: **Ultralytics YOLOv11x** weights from BaseballCV (`glove_tracking_v4_YOLOv11.pt`).  
+  We load these weights into Ultralytics > 8.3.x.
+- **Transfer learning** path:
+  - **Recommended (default):** **Phase-2 only** (glove-only fine-tune, nc=1). This is the most **stable** and **fast** way to improve glove detection on Windows.
+  - **Optional:** **Phase-1 multi-class** (nc=5) → then Phase-2 (nc=1). Phase-1 slightly adapts general features to the dataset distribution before specializing on glove. Useful if you have time and want to squeeze extra recall in busy scenes; can be slower/less stable on Windows.
 
-   ```bash
-   python data/download_data.py --extract
-   ```
+---
 
-   This unzips the archive into `data/baseball_rubber_home_glove/`, handles nested directories automatically and writes `data/baseball_rubber_home_glove.yaml` with the correct `train/val/test` splits.
+## Why a two-phase pipeline?
 
-4. **Run the full training and evaluation pipeline.**  Instead of executing training and evaluation separately, you can run everything with a single command:
+1. **Phase-1 (optional):** Multi-class fine-tune (nc=5) reminds the model of **contextual co-occurrences** (baseball, rubber, homeplate). This can reduce some false positives/negatives on ambiguous gloves because features remain aligned to the full scene semantics.
+2. **Phase-2 (recommended):** Switch to **glove-only (nc=1)** and specialize the final heads while gently training the backbone. This focuses capacity on glove localization and improves glove-only metrics.
 
-   ```bash
-   python run_pipeline.py --zip-path data/baseball_rubber_home_glove.zip \
-       --weights models/glove_tracking_v4_YOLOv11.pt --epochs 50 --batch 16 \
-       --imgsz 640 --name glove_ft_pipeline
-   ```
+> In practice (your machine, dataset size, Windows/RTX stack), **Phase-2 alone** delivered strong and stable results. Phase-1 is exposed as a switch for completeness and ablations.
 
-   On Windows `cmd.exe` you should either use the caret (`^`) for line continuations or put the entire command on one line. For example:
+---
 
-   ```cmd
-   python run_pipeline.py --zip-path data/baseball_rubber_home_glove.zip --weights models/glove_tracking_v4_YOLOv11.pt --epochs 50 --batch 16 --imgsz 640 --name glove_ft_pipeline
-   ```
+## Environment & installation
 
-   The script will extract the dataset (if needed), fine‑tune the model with Ultralytics YOLO and then evaluate both the baseline and fine‑tuned models, printing mAP@0.5, mAP@0.5:0.95, precision and recall for each.
+> Python 3.10–3.12; these instructions were validated with **Python 3.11.7** on Windows + RTX 4060.
 
-5. **(Alternative) Run training and evaluation manually.**  If you prefer to invoke the scripts yourself, use the following commands after the extraction step:
+```bash
+git clone https://github.com/<your_org>/<your_repo>.git
+cd <your_repo>
 
-   ```bash
-   # Train
-   python scripts/train.py --data data/baseball_rubber_home_glove.yaml \
-       --weights models/glove_tracking_v4_YOLOv11.pt --epochs 50 --batch 16 --imgsz 640 --name glove_ft_custom
+# Create & activate venv
+python -m venv .venv
+. .venv/Scripts/Activate.ps1   # PowerShell
+# or: .venv\Scripts\activate   # cmd.exe
 
-   # Evaluate
-   python scripts/evaluate.py --data data/baseball_rubber_home_glove.yaml \
-       --weights models/glove_tracking_v4_YOLOv11.pt \
-       --fine_tuned runs/train/glove_ft_custom/weights/best.pt --imgsz 640
-   ```
+# Install PyTorch for CUDA 12.1 (RTX 40-series)
+pip install --index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121
 
-   This yields the same metrics as the unified pipeline but gives you finer control over training options.
-
-## Notes
-
-* This repository does **not** embed the raw images or large weight files because of size constraints and authentication required by the hosting server. The provided download script will fetch them when possible.
-* Ensure you have CUDA‑enabled GPUs available if training for many epochs. If using CPU only, you may need to reduce image size and epochs to avoid excessive runtime.
-* See `report.md` for a detailed discussion of the modelling choices and evaluation results.
+# Then the rest
+pip install --upgrade pip
+pip install -r requirements.txt
