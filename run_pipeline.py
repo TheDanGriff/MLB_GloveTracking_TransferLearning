@@ -78,17 +78,40 @@ def main() -> None:
         dataset_dir = nested
     yaml_path = root / 'data' / 'baseball_rubber_home_glove.yaml'
     create_dataset_yaml(dataset_dir, yaml_path)
+    # Step 1: extract dataset and create YAML
+    # Determine the expected dataset directory and YAML path.
+    dataset_dir = root / 'data' / 'baseball_rubber_home_glove'
+    yaml_path = root / 'data' / 'baseball_rubber_home_glove.yaml'
 
-    # Step 2: train the model
-    print("\n=== Training model ===")
-    model = YOLO(str(args.weights))
-    train_kwargs = {
-        'data': str(yaml_path),
-        'epochs': args.epochs,
-        'batch': args.batch,
-        'imgsz': args.imgsz,
-        'lr0': args.lr0,
-        'lrf': args.lrf,
+    zip_path = root / args.zip_path
+
+    # If a ZIP archive is provided and exists, extract it.
+    # Otherwise, fall back to using an existing dataset directory or YAML file.
+    if zip_path.exists():
+        print(f"Found dataset archive at {zip_path}, extracting …")
+        extract_zip(zip_path, dataset_dir)
+        # Handle nested folder inside the archive automatically
+        nested = dataset_dir / 'baseball_rubber_home_glove'
+        if nested.exists() and nested.is_dir():
+            dataset_dir = nested
+        # Always regenerate the YAML to reflect the extracted data
+        create_dataset_yaml(dataset_dir, yaml_path)
+    else:
+        # No archive; attempt to use existing dataset directory or YAML
+        if yaml_path.exists():
+            print(f"Dataset archive not found, but found existing YAML at {yaml_path}. Skipping extraction.")
+        elif dataset_dir.exists():
+            print(f"Dataset archive not found, using existing dataset directory {dataset_dir} to create YAML.")
+            # If the directory contains a nested folder with the same name, adjust the path
+            nested = dataset_dir / 'baseball_rubber_home_glove'
+            if nested.exists() and nested.is_dir():
+                dataset_dir = nested
+            create_dataset_yaml(dataset_dir, yaml_path)
+        else:
+            print(f"Dataset zip not found at {zip_path} and no existing dataset directory or YAML file present.")
+            print("Please download the dataset zip into the data/ folder or run the download script.")
+            sys.exit(1)
+
         'momentum': args.momentum,
         'weight_decay': args.weight_decay,
         'optimizer': args.optimizer,
