@@ -40,25 +40,59 @@ def extract_zip(zip_path: Path, out_dir: Path) -> None:
         zf.extractall(out_dir)
 
 def create_dataset_yaml(dataset_dir: Path, yaml_path: Path) -> None:
-    """Create a dataset YAML file for Ultralytics YOLO."""
-    images_dir = dataset_dir / "images"
-    labels_dir = dataset_dir / "labels"
-    yaml_content = f"""
-path: {dataset_dir}
-train: images
-val: images
-test: images
+    """Create a dataset YAML file for Ultralytics YOLO.
 
-nc: 1
-names: ['glove']
-"""
-    yaml_path.write_text(yaml_content.strip() + "\n")
+    A BaseballCV dataset extracted from the ``baseball_rubber_home_glove``
+    archive follows the structure:
+
+    ``dataset_dir/``
+        ``train/images``
+        ``train/labels``
+        ``val`` or ``valid``
+        ``test`` (optional)
+
+    This helper inspects the extracted directory to choose the correct
+    validation folder name (``val`` or ``valid``).  It then writes
+    a YAML configuration pointing YOLO to the appropriate sub‑directories.
+    The ``path`` field points to the dataset root, and ``train``, ``val``
+    and ``test`` fields are relative to this root.
+    """
+
+    # Determine which validation directory exists: ``val`` or ``valid``
+    if (dataset_dir / "val").exists():
+        val_dir = "val"
+    elif (dataset_dir / "valid").exists():
+        val_dir = "valid"
+    else:
+        # If no validation folder is present, reuse the train set for validation
+        val_dir = "train"
+
+    # Use 'test' if present, otherwise fall back to validation set
+    if (dataset_dir / "test").exists():
+        test_dir = "test"
+    else:
+        test_dir = val_dir
+
+    yaml_lines = [
+        f"path: {dataset_dir}",
+        f"train: {Path('train') / 'images'}",
+        f"val: {Path(val_dir) / 'images'}",
+        f"test: {Path(test_dir) / 'images'}",
+        "",
+        "nc: 1",
+        "names: ['glove']",
+    ]
+    yaml_text = "\n".join(yaml_lines) + "\n"
+    yaml_path.write_text(yaml_text)
     print(f"Wrote dataset YAML to {yaml_path}")
 
 def main(args: argparse.Namespace) -> None:
     root = Path(__file__).resolve().parents[1]  # repository root
     raw_dir = root / "data" / "raw"
     weights_dir = root / "models"
+    # When manually downloading the zip, place it directly under ``data``.
+    # We default to the file in ``data/raw`` for backward compatibility but also
+    # check ``data/baseball_rubber_home_glove.zip`` when extracting.
     dataset_zip = raw_dir / "baseball_rubber_home_glove.zip"
     weights_file = weights_dir / "glove_tracking_v4_YOLOv11.pt"
 
@@ -83,12 +117,21 @@ def main(args: argparse.Namespace) -> None:
 
     if args.extract:
         # Extract dataset
+        # If the zip is not found in the raw directory, fall back to the data directory
         if not dataset_zip.exists():
-            print(f"Dataset zip does not exist at {dataset_zip}. Download it first.")
-            sys.exit(1)
+            alt_zip = root / "data" / "baseball_rubber_home_glove.zip"
+            if alt_zip.exists():
+                dataset_zip = alt_zip
+            else:
+                print(f"Dataset zip does not exist at {dataset_zip} or {alt_zip}. Download it first.")
+                sys.exit(1)
         dataset_dir = root / "data" / "baseball_rubber_home_glove"
         extract_zip(dataset_zip, dataset_dir)
-        # Create YAML file for YOLO
+        # The archive contains a nested folder with the same name; if so, descend
+        nested = dataset_dir / "baseball_rubber_home_glove"
+        if nested.exists() and nested.is_dir():
+            dataset_dir = nested
+        # Create YAML file for YOLO with proper train/val/test splits
         yaml_path = root / "data" / "baseball_rubber_home_glove.yaml"
         create_dataset_yaml(dataset_dir, yaml_path)
 
