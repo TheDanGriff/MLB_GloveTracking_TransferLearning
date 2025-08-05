@@ -280,16 +280,16 @@ map50_95 = 0.484
 
 ---
 
-## 9) Repository layout (expected)
+## 9) Repository layout
 
 ```
 .
 ├── two_phase_pipeline.py
 ├── requirements.txt
 ├── models/
-│   └── glove_tracking_v4_YOLOv11.pt        # provided externally
+│   └── glove_tracking_v4_YOLOv11.pt   
 ├── data/
-│   └── baseball_rubber_home_glove/         # or .zip at data/baseball_rubber_home_glove.zip
+│   └── baseball_rubber_home_glove/  
 └── results/
     ├── val_batch0_labels.jpg
     ├── val_batch0_pred.jpg
